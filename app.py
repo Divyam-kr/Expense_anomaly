@@ -55,7 +55,7 @@ if uploaded_file is not None:
     transaction_dataa = pd.read_csv(uploaded_file)
     transaction_dataa['Date'] = pd.to_datetime(transaction_dataa['Date'])  # Convert 'Date' column to datetime
     
-    st.subheader("Uploaded Transaction Data")
+    st.subheader("")
     st.dataframe(transaction_dataa.head(), use_container_width=True)
 
     # Apply categorization
