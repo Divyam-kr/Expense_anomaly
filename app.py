@@ -22,21 +22,63 @@ def categorize_transaction(description):
     return 'Other'  # Return 'Other' if no match is found
 
 # Function to apply Isolation Forest and extract anomalies month-wise
-def detect_anomalies_monthly(data):
+
+from sklearn.neighbors import LocalOutlierFactor
+from sklearn.preprocessing import LabelEncoder
+import numpy as np
+import matplotlib.pyplot as plt
+from scipy.stats import zscore
+
+def feature_engineering(df):
+    df = df.copy()
+    # Encode category
+    le = LabelEncoder()
+    df['Category_enc'] = le.fit_transform(df['Category'])
+    # Extract time features
+    df['DayOfWeek'] = df['Date'].dt.dayofweek
+    df['Hour'] = pd.to_datetime(df['Time'], format='%H:%M').dt.hour
+    return df
+
+def detect_anomalies_monthly(data, model_name='Isolation Forest', n_estimators=20, contamination=0.03, n_neighbors=20, z_thresh=3.0):
     monthly_anomalies = {}
     data['Anomaly'] = None
+    data['Anomaly_Score'] = None
 
     for period, group in data.groupby(data['Date'].dt.to_period('M')):
-        # Prepare data for Isolation Forest
-        model = IsolationForest(n_estimators=20, max_features=0.5, max_samples=0.75, contamination=0.03)
-        group['Anomaly'] = model.fit_predict(group[['Amount']])
+        group = feature_engineering(group)
+        features = group[['Amount', 'Category_enc', 'DayOfWeek', 'Hour']]
+        if model_name == 'Isolation Forest':
+            model = IsolationForest(n_estimators=n_estimators, max_features=0.8, max_samples=0.8, contamination=contamination, random_state=42)
+            preds = model.fit_predict(features)
+            scores = model.decision_function(features)
+        elif model_name == 'Local Outlier Factor':
+            model = LocalOutlierFactor(n_neighbors=n_neighbors, contamination=contamination)
+            preds = model.fit_predict(features)
+            scores = model.negative_outlier_factor_
+        elif model_name == 'Z-Score':
+            # Only use Amount for Z-score
+            z_scores = zscore(group['Amount'])
+            preds = np.where(np.abs(z_scores) > z_thresh, -1, 1)
+            scores = z_scores
         
-        # Extract anomalies (where Anomaly == -1)
+        else:
+            preds = np.ones(len(group))
+            scores = np.zeros(len(group))
+        group['Anomaly'] = preds
+        group['Anomaly_Score'] = scores
         anomalies = group[group['Anomaly'] == -1]
-
         if not anomalies.empty:
-            monthly_anomalies[period] = anomalies[['Date', 'Time', 'Amount', 'Description']]
-    
+            monthly_anomalies[period] = anomalies[['Date', 'Time', 'Amount', 'Description', 'Category', 'Anomaly_Score']]
+        # Visualization: plot Amount vs Anomaly Score
+        plt.figure(figsize=(8,4))
+        plt.scatter(group['Amount'], group['Anomaly_Score'], c=(group['Anomaly']==-1), cmap='coolwarm', label='Anomaly')
+        plt.xlabel('Amount')
+        plt.ylabel('Anomaly Score' if model_name != 'Z-Score' else 'Z-Score')
+        plt.title(f'Anomaly Scores for {period}')
+        plt.legend(['Normal','Anomaly'])
+        plt.tight_layout()
+        plt.savefig(f'anomaly_plot_{period}.png')
+        plt.close()
     return monthly_anomalies
 
 # Streamlit application
@@ -45,16 +87,35 @@ st.set_page_config(page_title="Financial Transaction Analyzer", layout="wide")
 st.title("💰 Financial Transaction Analyzer")
 st.write("This application helps you analyze financial transactions by detecting anomalies based on uploaded transaction data.")
 
+
 # Sidebar for user input
 st.sidebar.header("User Input")
 uploaded_file = st.sidebar.file_uploader("Upload your CSV file", type=["csv"])
+
+
+# Advanced ML options
+st.sidebar.header("ML Model & Parameters")
+model_name = st.sidebar.selectbox("Select Anomaly Detection Model", ["Isolation Forest", "Local Outlier Factor", "Z-Score"])
+
+# Show only relevant hyperparameters
+contamination = None
+n_estimators = None
+n_neighbors = None
+z_thresh = None
+if model_name == "Isolation Forest":
+    contamination = st.sidebar.slider("Contamination (expected anomaly %)", 0.01, 0.2, 0.03, step=0.01)
+    n_estimators = st.sidebar.slider("n_estimators", 10, 100, 20, step=5)
+elif model_name == "Local Outlier Factor":
+    contamination = st.sidebar.slider("Contamination (expected anomaly %)", 0.01, 0.2, 0.03, step=0.01)
+    n_neighbors = st.sidebar.slider("n_neighbors", 5, 50, 20, step=1)
+elif model_name == "Z-Score":
+    z_thresh = st.sidebar.slider("Z-Score Threshold", 2.0, 5.0, 3.0, step=0.1)
 
 # Process uploaded file
 if uploaded_file is not None:
     # Read CSV file
     transaction_dataa = pd.read_csv(uploaded_file)
     transaction_dataa['Date'] = pd.to_datetime(transaction_dataa['Date'])  # Convert 'Date' column to datetime
-    
     st.subheader("")
     st.dataframe(transaction_dataa.head(), use_container_width=True)
 
@@ -69,13 +130,24 @@ if uploaded_file is not None:
     # Anomaly detection
     if st.sidebar.button("Detect Anomalies"):
         st.sidebar.write("Analyzing the data for anomalies, please wait...")
-        monthly_anomalies = detect_anomalies_monthly(transaction_data)
-        
-        # Display anomalies
+        # Pass only relevant params
+        detect_kwargs = {"model_name": model_name}
+        if model_name == "Isolation Forest":
+            detect_kwargs["n_estimators"] = n_estimators
+            detect_kwargs["contamination"] = contamination
+        elif model_name == "Local Outlier Factor":
+            detect_kwargs["n_neighbors"] = n_neighbors
+            detect_kwargs["contamination"] = contamination
+        elif model_name == "Z-Score":
+            detect_kwargs["z_thresh"] = z_thresh
+        monthly_anomalies = detect_anomalies_monthly(transaction_data, **detect_kwargs)
+        # Display anomalies and plots
         if monthly_anomalies:
             for month, anomalies in monthly_anomalies.items():
                 st.subheader(f"📊 Anomalies Detected for {month}:")
                 st.write(anomalies)
+                plot_path = f'anomaly_plot_{month}.png'
+                st.image(plot_path, caption=f'Anomaly Score Plot for {month}')
         else:
             st.warning("No anomalies detected in the uploaded data.")
 
