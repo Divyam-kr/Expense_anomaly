@@ -127,6 +127,7 @@ if uploaded_file is not None:
     st.subheader("Categorized Transaction Data")
     st.dataframe(transaction_data, use_container_width=True)
 
+
     # Anomaly detection
     if st.sidebar.button("Detect Anomalies"):
         st.sidebar.write("Analyzing the data for anomalies, please wait...")
@@ -150,6 +151,113 @@ if uploaded_file is not None:
                 st.image(plot_path, caption=f'Anomaly Score Plot for {month}')
         else:
             st.warning("No anomalies detected in the uploaded data.")
+
+
+    # --- GenAI-powered Key Insights Box ---
+    import io
+    import textwrap
+    import google.generativeai as genai
+    st.markdown("""
+        <style>
+        .insight-box {
+            background: linear-gradient(90deg, #e0eafc 0%, #cfdef3 100%);
+            border-radius: 12px;
+            padding: 1.5em 2em;
+            margin-top: 2em;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.07);
+            font-size: 1.1em;
+        }
+        .insight-title {
+            font-size: 1.3em;
+            font-weight: bold;
+            color: #1a237e;
+            margin-bottom: 0.5em;
+        }
+        .genai-summary-box {
+            background: linear-gradient(90deg, #f8ffae 0%, #43c6ac 100%);
+            border-radius: 12px;
+            padding: 1.5em 2em;
+            margin-top: 1.5em;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.09);
+            font-size: 1.08em;
+        }
+        .genai-summary-title {
+            font-size: 1.2em;
+            font-weight: bold;
+            color: #00695c;
+            margin-bottom: 0.5em;
+        }
+        </style>
+    """, unsafe_allow_html=True)
+
+    def generate_key_insights(df):
+        # Simple GenAI-style summary (could be replaced with LLM API)
+        total = df['Amount'].sum()
+        avg = df['Amount'].mean()
+        max_amt = df['Amount'].max()
+        min_amt = df['Amount'].min()
+        most_cat = df['Category'].value_counts().idxmax()
+        most_cat_amt = df.groupby('Category')['Amount'].sum().idxmax()
+        busiest_day = df['Date'].dt.day_name().value_counts().idxmax()
+        n_tx = len(df)
+        n_months = df['Date'].dt.to_period('M').nunique()
+        return textwrap.dedent(f'''
+            <div class=\"insight-title\">🔍 Key Insights</div>
+            <ul>
+                <li><b>Total Transactions:</b> {n_tx}</li>
+                <li><b>Time Span:</b> {n_months} months</li>
+                <li><b>Total Spent:</b> ₹{total:,.2f}</li>
+                <li><b>Average Transaction:</b> ₹{avg:,.2f}</li>
+                <li><b>Largest Transaction:</b> ₹{max_amt:,.2f}</li>
+                <li><b>Smallest Transaction:</b> ₹{min_amt:,.2f}</li>
+                <li><b>Most Frequent Category:</b> {most_cat}</li>
+                <li><b>Highest Spending Category:</b> {most_cat_amt}</li>
+                <li><b>Busiest Day:</b> {busiest_day}</li>
+            </ul>
+            <i>These insights are generated using GenAI-style analysis of your uploaded data.</i>
+        </div>
+        ''')
+
+
+    # --- Real LLM (Gemini) Integration ---
+    def get_gemini_insights(df, api_key, prompt_type="summary"):
+        genai.configure(api_key=api_key)
+        model = genai.GenerativeModel('gemini-2.0-flash')
+        # Prepare a concise summary of the data for the LLM
+        summary = f"""
+        You are a financial data analyst. Here is a summary of the user's transaction data:
+        - Total transactions: {len(df)}
+        - Time span: {df['Date'].dt.to_period('M').nunique()} months
+        - Total spent: ₹{df['Amount'].sum():,.2f}
+        - Average transaction: ₹{df['Amount'].mean():,.2f}
+        - Largest transaction: ₹{df['Amount'].max():,.2f}
+        - Smallest transaction: ₹{df['Amount'].min():,.2f}
+        - Most frequent category: {df['Category'].value_counts().idxmax()}
+        - Highest spending category: {df.groupby('Category')['Amount'].sum().idxmax()}
+        - Busiest day: {df['Date'].dt.day_name().value_counts().idxmax()}
+        """
+        if prompt_type == "summary":
+            prompt = summary + "\n\nGenerate a natural language summary of the user's spending patterns, highlighting any interesting trends or anomalies."
+        else:
+            prompt = summary + "\n\nBased on this data, provide personalized recommendations to help the user manage their expenses better."
+        try:
+            response = model.generate_content(prompt)
+            return response.text
+        except Exception as e:
+            return f"<i>LLM error: {e}</i>"
+
+    # Use your Gemini API key here
+    GEMINI_API_KEY = "AIzaSyB77fhJKNIQdIzTPQmGg8HBT7Tjdc3-TrY"
+
+    st.markdown('<div class=\"insight-box\">' + generate_key_insights(transaction_data) + '</div>', unsafe_allow_html=True)
+
+    with st.spinner("Generating LLM-powered summary..."):
+        gemini_summary = get_gemini_insights(transaction_data, GEMINI_API_KEY, prompt_type="summary")
+    st.markdown('<div class=\"genai-summary-box\">' + f'<div class="genai-summary-title">🧠 Gemini LLM Summary</div>' + gemini_summary + '</div>', unsafe_allow_html=True)
+
+    with st.spinner("Generating LLM-powered recommendations..."):
+        gemini_recs = get_gemini_insights(transaction_data, GEMINI_API_KEY, prompt_type="recommendations")
+    st.markdown('<div class=\"genai-summary-box\">' + f'<div class="genai-summary-title">💡 Gemini LLM Recommendations</div>' + gemini_recs + '</div>', unsafe_allow_html=True)
 
 # Footer
 st.write("___")
